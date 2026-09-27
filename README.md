@@ -1,0 +1,133 @@
+# A Retrieval-Augmented Generation Based Approach for Medical Report Generation
+
+MS thesis project (COMSATS University Islamabad, AI, Fall 2024 – Fall 2025) on automated chest X-ray report generation. The system aligns radiology images with text using **BiomedCLIP**, retrieves similar prior cases with **dense (FAISS) and knowledge-graph-aware retrieval**, reasons over a disease co-occurrence / relational graph with a **DistMult knowledge-graph embedding model**, and conditions an LLM (**GPT-4o-mini**) on the fused evidence to generate the final radiology **impression**.
+
+📄 **Thesis PDF:** [`thesis/Thesis.pdf`](thesis/Thesis.pdf)
+🎓 Author: Iqra Jannat · Supervisor: Dr. Tehseen Zia · CIIT / SP23-RAI-018 / ISB
+
+---
+
+## Abstract
+
+Radiology report generation from chest X-rays is typically framed as an image-captioning problem, but plain vision-to-text models hallucinate clinical findings and ignore relationships between co-occurring diseases. This thesis proposes a **graph-aware retrieval-augmented generation (RAG)** pipeline that:
+
+1. Extracts image-grounded clinical concepts via **BiomedCLIP** (vision-language alignment).
+2. Builds a **knowledge graph** over clinical concepts/diseases (a PMI-based co-occurrence graph, and — as an ablation — a RadGraph-derived graph) and reasons over it with a **DistMult** relational embedding model.
+3. Retrieves the most relevant prior reports using a **weighted fusion of text similarity (dense FAISS retrieval), KG neighborhood score, and GNN/DistMult disease-prior similarity**.
+4. Generates the final impression with an LLM (GPT-4o-mini), conditioned on the retrieved evidence and disease priors.
+
+Evaluated on the **IU X-Ray** and **MIMIC-CXR** datasets using BLEU-1..4, ROUGE-L, and CIDEr.
+
+---
+
+## Repository structure
+
+```
+.
+├── code/
+│   ├── pipeline/                  # Final, reported pipeline (run in this order)
+│   │   ├── 01_train_kg_gnn_distmult.py        # Builds the KG + trains the DistMult GNN, saves priors/checkpoint
+│   │   └── 02_rag_kg_gnn_reasoning_final.py   # Graph-aware RAG + LLM generation + explainable reasoning paths
+│   │
+│   └── experiments/                # Ablations / iterative development (kept for transparency & reproducibility)
+│       ├── exp1_baseline_rag_bioclinicalbert.py     # Baseline: plain dense (FAISS) RAG, no KG/GNN
+│       ├── exp2_graph_rag_kg_cooccurrence.py        # + PMI co-occurrence KG, heuristic GNN-prior weighting
+│       ├── exp3_graph_rag_true_gnn_fusion.py        # + true DistMult GNN similarity fusion
+│       ├── exp4_gnn_priors_wide_fusion.py           # Variant: KG-RAG with loaded (long-format) GNN disease priors
+│       └── exp5_full_pipeline_alignment_gnn.py      # Full pipeline incl. BiomedCLIP alignment concepts + GNN fusion
+│
+├── data/
+│   └── alignment_concepts.json     # BiomedCLIP-derived per-image alignment concepts (uid -> concept list)
+│
+├── results/
+│   ├── rag_outputs_test.csv        # Sample generated vs. ground-truth reports (RadGraph-KG ablation)
+│   └── rag_gpt_radgraph_results.csv
+│   # Note: rag_prompts.csv (full RadGraph-KG prompt log) is omitted here — it's >10MB.
+│   #       Available in the author's Drive on request.
+│
+├── thesis/
+│   └── Thesis.pdf                  # Full thesis document (see thesis/README.md if not yet added)
+│
+├── requirements.txt
+├── LICENSE
+└── README.md
+```
+
+### Final pipeline vs. experiments — why both are here
+
+The `code/pipeline/` scripts are the ones whose output (`iu_rag_reasoning_results.csv`) matches the results actually tracked and reported in the thesis. The `code/experiments/` scripts are the **development lineage and ablation studies** behind that final design — each one isolates a specific design choice (dense retrieval only → + co-occurrence KG → + heuristic GNN weighting → + true GNN/DistMult fusion → + BiomedCLIP alignment concepts). They are kept because:
+
+- The thesis explicitly reports an ablation comparing a **handcrafted lexicon-based KG vs. a RadGraph-derived KG** (see Chapter 4), and these scripts are that evidence trail.
+- They demonstrate the incremental design process a reviewer/committee (or a PhD admissions committee) would want to see, not just the final number.
+
+If you only want to run the reported system, use `code/pipeline/` in numeric order.
+
+---
+
+## Datasets
+
+- **IU X-Ray** (Indiana University Chest X-Ray Collection) — loaded via `datasets.load_dataset("ykumards/open-i")` on Hugging Face.
+- **MIMIC-CXR** — used for additional evaluation (see thesis for access/credentialing requirements via PhysioNet).
+
+## Setup
+
+```bash
+git clone <this-repo-url>
+cd <repo>
+pip install -r requirements.txt
+export OPENAI_API_KEY="sk-..."   # required for report generation (GPT-4o-mini)
+```
+
+> **Note on large files:** `distmult_iu.ckpt`, `biomedclip_image.pt`, and the BioClinicalBERT embedding files (`iu_bioclinicalbert_embeddings.npy`, `iu_bioclinicalbert_dict.pt`) are **not tracked in this repo** (see `.gitignore`) due to size. They are regenerated by running the pipeline scripts below, or are available on request from the author.
+
+## Running the pipeline
+
+```bash
+# Stage 1 — build the KG and train the DistMult GNN, produce disease priors
+python code/pipeline/01_train_kg_gnn_distmult.py
+
+# Stage 2 — graph-aware RAG retrieval + LLM report generation + evaluation
+python code/pipeline/02_rag_kg_gnn_reasoning_final.py
+```
+
+Stage 2 prints BLEU-1..4, ROUGE-L, and CIDEr, and saves per-case generations plus explainable reasoning paths to CSV.
+
+## Key results
+
+Fusion weighting used in the final pipeline: `ALPHA=0.70` (text similarity) · `BETA=0.20` (KG neighborhood score) · `GAMMA=0.10` (GNN/DistMult disease-prior similarity).
+
+Detailed BLEU/ROUGE/CIDEr scores for the final pipeline and each ablation are reported in the thesis (Chapter 5 — Results and Evaluation); see [`thesis/Thesis.pdf`](thesis/Thesis.pdf).
+
+## Method overview
+
+| Component | Approach |
+|---|---|
+| Vision-language alignment | BiomedCLIP (OpenCLIP) |
+| Disease/negation extraction | Rule-based CheXpert-style lexicon + negation-window check |
+| Knowledge graph | PMI-based co-occurrence graph (+ ablation: RadGraph-derived graph) |
+| Graph reasoning | DistMult knowledge-graph embedding (relational GNN scoring) |
+| Retrieval | Dense (BioClinicalBERT + FAISS `IndexFlatIP`) fused with KG + GNN scores |
+| Generation | GPT-4o-mini, conditioned on retrieved cases + evidence weights |
+| Evaluation | BLEU-1..4, ROUGE-L, CIDEr |
+
+## Citation
+
+If you reference this work, please cite:
+
+```bibtex
+@mastersthesis{jannat2025ragmedreport,
+  author  = {Iqra Jannat},
+  title   = {A Retrieval-Augmented Generation Based Approach for Medical Report Generation},
+  school  = {COMSATS University Islamabad},
+  year    = {2025},
+  note    = {Supervisor: Dr. Tehseen Zia}
+}
+```
+
+## License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE).
+
+## Contact
+
+Iqra Jannat — iqrajannat88@gmail.com

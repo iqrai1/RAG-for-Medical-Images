@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+.env
+
+# Large model artifacts (not tracked in this repo — see README for how to regenerate/download)
+*.ckpt
+*.pt
+*.npy
+
+# OS
+.DS_Store
